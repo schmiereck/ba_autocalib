@@ -1,0 +1,46 @@
+# Calibration sweep poses (joint-space).
+#
+# Each pose is 5 joint values [joint_0, joint_1, joint_2, joint_3, joint_4]
+# in radians. joint_5 (gripper) is ignored by the 'arm' planning group.
+#
+# Selection criteria:
+#   - marker_grasp visible from the camera in as many poses as possible
+#   - spread across the workspace (near/mid/far, left/center/right)
+#   - varied Z (different camera-marker distances) to span d_rel well
+#
+# Tune these values once for the actual workspace — use rviz with the
+# MotionPlanning panel, click a pose you like, and read back the joint
+# values from the current state.
+#
+# Joint reference:
+#   joint_0 = base rotation       (home = pi/2 in URDF)
+#   joint_1 = shoulder pitch      (home = pi/2)
+#   joint_2 = elbow               (home = 0)
+#   joint_3 = wrist pitch         (home = pi/2)
+#   joint_4 = wrist roll          (home = 0)
+
+poses:
+  - name: near_center
+    joints: [1.5708, 1.8000, 1.2000, 1.5708, 0.0000]
+  - name: near_left
+    joints: [2.0000, 1.8000, 1.2000, 1.5708, 0.0000]
+  - name: near_right
+    joints: [1.1000, 1.8000, 1.2000, 1.5708, 0.0000]
+  - name: mid_center
+    joints: [1.5708, 1.4000, 1.5000, 1.5708, 0.0000]
+  - name: mid_left
+    joints: [2.0000, 1.4000, 1.5000, 1.5708, 0.0000]
+  - name: mid_right
+    joints: [1.1000, 1.4000, 1.5000, 1.5708, 0.0000]
+  - name: far_center
+    joints: [1.5708, 1.0000, 1.8000, 1.5708, 0.0000]
+  - name: far_left
+    joints: [1.9000, 1.0000, 1.8000, 1.5708, 0.0000]
+  - name: far_right
+    joints: [1.2000, 1.0000, 1.8000, 1.5708, 0.0000]
+  - name: high_center
+    joints: [1.5708, 2.0000, 0.8000, 1.5708, 0.3000]
+  - name: low_left
+    joints: [1.8000, 1.2000, 1.6000, 1.5708, -0.3000]
+  - name: low_right
+    joints: [1.3000, 1.2000, 1.6000, 1.5708, -0.3000]

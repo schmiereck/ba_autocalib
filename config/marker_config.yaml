@@ -1,0 +1,31 @@
+# Marker definitions for ba_autocalib.
+#
+# Each marker:
+#   tf_frame   : the link name in the URDF (base_link <- marker_X via TF2)
+#   hsv_lower  : [H, S, V] lower bound (OpenCV uses H in [0, 179])
+#   hsv_upper  : [H, S, V] upper bound
+#   min_area_px / max_area_px: contour area window (rejects noise + blobs)
+#
+# HSV tuning hint: open your camera image in an HSV inspector and sample
+# the marker color at typical lighting. Widen S/V ranges, narrow H.
+# For red, H can be set with low>high to wrap around 0 (handled by detector).
+
+markers:
+  grasp:
+    tf_frame: marker_grasp
+    hsv_lower: [5, 150, 100]        # orange
+    hsv_upper: [20, 255, 255]
+    min_area_px: 30
+    max_area_px: 5000
+  forearm:
+    tf_frame: marker_forearm
+    hsv_lower: [45, 100, 80]        # green
+    hsv_upper: [75, 255, 255]
+    min_area_px: 30
+    max_area_px: 5000
+  base:
+    tf_frame: marker_base
+    hsv_lower: [100, 150, 80]       # blue
+    hsv_upper: [130, 255, 255]
+    min_area_px: 30
+    max_area_px: 5000
