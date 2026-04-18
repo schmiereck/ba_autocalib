@@ -50,7 +50,7 @@ from rclpy.qos import (DurabilityPolicy, HistoryPolicy, QoSProfile,
 from sensor_msgs.msg import CameraInfo, CompressedImage, Image, JointState
 from std_msgs.msg import Float32, Float32MultiArray, Int32, String
 from std_srvs.srv import Trigger
-from tf2_ros import Buffer, LookupException, TransformListener
+from tf2_ros import Buffer, LookupException, StaticTransformBroadcaster, TransformListener
 
 from .data_collector import DataCollector, StillnessDetector
 from .marker_detector import HSVStats, MarkerConfig, MarkerDetector
@@ -114,6 +114,9 @@ class AutoCalibNode(Node):
 
         self._tf_buffer = Buffer()
         self._tf_listener = TransformListener(self._tf_buffer, self)
+        # Broadcasts the solved camera_rect frame into TF so RViz Camera
+        # display can overlay the camera image on the 3D robot model.
+        self._tf_static_bc = StaticTransformBroadcaster(self)
 
         self._K: Optional[np.ndarray] = None
         self._dist: Optional[np.ndarray] = None
@@ -529,7 +532,7 @@ class AutoCalibNode(Node):
         t = TransformStamped()
         t.header.stamp = self.get_clock().now().to_msg()
         t.header.frame_id = self._base_frame
-        t.child_frame_id = 'camera_rect'
+        t.child_frame_id = 'overview_camera_link'
         t.transform.translation.x = float(T_base_cam[0, 3])
         t.transform.translation.y = float(T_base_cam[1, 3])
         t.transform.translation.z = float(T_base_cam[2, 3])
@@ -539,6 +542,9 @@ class AutoCalibNode(Node):
         t.transform.rotation.z = q[2]
         t.transform.rotation.w = q[3]
         self._pub_he.publish(t)
+        # Also broadcast into /tf_static so RViz Camera display can find
+        # the camera_rect frame and overlay the camera image on the 3D scene.
+        self._tf_static_bc.sendTransform(t)
 
     def _publish_status(self, text: str) -> None:
         self._pub_status.publish(String(data=text))

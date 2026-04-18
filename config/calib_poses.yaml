@@ -199,3 +199,32 @@ poses:
   - name: flat_middle_5_forward
     joints: [1.5708,  3.14159,  2.26893, 2.26893, 1.5708]
 
+# 15-16: upward (Pose 11) links/rechts — gleiche Konfiguration, nur j0 ±10°
+  - name: upward_10_left
+    joints: [1.74533,  2.96706,  0.872665, 0.0, 1.5708]
+  - name: upward_10_right
+    joints: [1.22173,  2.96706,  0.872665, 0.0, 1.5708]
+
+# 17-18: flat_height (Pose 10) links/rechts
+  - name: flat_height_10_left
+    joints: [1.74533,  1.91986,  0.523599, 1.5708, 1.5708]
+  - name: flat_height_10_right
+#0   80    1.39626
+    joints: [1.39626,  1.91986,  0.523599, 1.5708, 1.5708]
+
+# 19-20: downward (Pose 12) links/rechts
+  - name: downward_10_left
+    joints: [1.74533,  1.74533,  0.698132, 3.14159, 1.5708]
+  - name: downward_10_right
+    joints: [1.22173,  1.74533,  0.698132, 3.14159, 1.5708]
+
+# 21: Noch höher als Pose 13 — BITTE ERST IN RVIZ PRÜFEN bevor du aktivierst!
+# Idee: j2 von 180° auf 160° reduziert, damit der Arm etwas höher/weiter reicht.
+#0	90		1.5708
+#1	180    3.14159
+#2	160    2.79253
+#3	180    3.14159
+#4	90		1.5708
+  - name: higher_than_13
+    joints: [1.5708, 3.14159, 2.79253, 2.79253, 1.5708]
+
