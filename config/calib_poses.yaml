@@ -8,9 +8,12 @@
 #   - spread across the workspace (near/mid/far, left/center/right)
 #   - varied Z (different camera-marker distances) to span d_rel well
 #
-# Tune these values once for the actual workspace — use rviz with the
-# MotionPlanning panel, click a pose you like, and read back the joint
-# values from the current state.
+# Anchored around the known-good working pose
+#   [1.5708, 0.0, 0.0, 3.14, 1.5708, 0.76]
+# where all three markers (grasp/forearm/base) are visible over the
+# chessboard. joint_3=pi (wrist folded back) and joint_4=pi/2 keep the
+# marker stickers facing the camera — do NOT change these without
+# re-verifying in rviz.
 #
 # Joint reference:
 #   joint_0 = base rotation       (home = pi/2 in URDF)
@@ -20,27 +23,179 @@
 #   joint_4 = wrist roll          (home = 0)
 
 poses:
-  - name: near_center
-    joints: [1.5708, 1.8000, 1.2000, 1.5708, 0.0000]
-  - name: near_left
-    joints: [2.0000, 1.8000, 1.2000, 1.5708, 0.0000]
-  - name: near_right
-    joints: [1.1000, 1.8000, 1.2000, 1.5708, 0.0000]
-  - name: mid_center
-    joints: [1.5708, 1.4000, 1.5000, 1.5708, 0.0000]
-  - name: mid_left
-    joints: [2.0000, 1.4000, 1.5000, 1.5708, 0.0000]
-  - name: mid_right
-    joints: [1.1000, 1.4000, 1.5000, 1.5708, 0.0000]
-  - name: far_center
-    joints: [1.5708, 1.0000, 1.8000, 1.5708, 0.0000]
-  - name: far_left
-    joints: [1.9000, 1.0000, 1.8000, 1.5708, 0.0000]
-  - name: far_right
-    joints: [1.2000, 1.0000, 1.8000, 1.5708, 0.0000]
-  - name: high_center
-    joints: [1.5708, 2.0000, 0.8000, 1.5708, 0.3000]
-  - name: low_left
-    joints: [1.8000, 1.2000, 1.6000, 1.5708, -0.3000]
-  - name: low_right
-    joints: [1.3000, 1.2000, 1.6000, 1.5708, -0.3000]
+  # Zusammengefaltete Startposition
+#  - name: anchor
+#    joints: [1.5708,  0.0000,  0.0000, 3.1400, 1.5708]
+#  # Zusammengefaltete Startposition, Base nach links gedreht
+#  - name: base_left
+#    joints: [1.9000,  0.0000,  0.0000, 3.1400, 1.5708]
+#  # Zusammengefaltete Startposition, Base nach links gedreht
+#  - name: base_right
+#    joints: [1.2000,  0.0000,  0.0000, 3.1400, 1.5708]
+#  # Arm hoch, nahe am Roboter
+#  - name: shoulder_up
+#    joints: [1.5708,  0.3000,  0.0000, 3.1400, 1.5708]
+#  - name: shoulder_down
+#    joints: [1.5708, -0.3000,  0.0000, 3.1400, 1.5708]
+#  - name: elbow_fwd
+#    joints: [1.5708,  0.0000,  0.3000, 3.1400, 1.5708]
+#  - name: elbow_back
+#    joints: [1.5708,  0.0000, -0.3000, 3.1400, 1.5708]
+#  - name: left_up
+#    joints: [1.8000,  0.2000,  0.0000, 3.1400, 1.5708]
+#  - name: right_up
+#    joints: [1.3000,  0.2000,  0.0000, 3.1400, 1.5708]
+#  - name: left_fwd
+#    joints: [1.8000,  0.0000,  0.2000, 3.1400, 1.5708]
+#  - name: right_fwd
+#    joints: [1.3000,  0.0000,  0.2000, 3.1400, 1.5708]
+#  - name: wrist_roll_var
+#    joints: [1.5708,  0.0000,  0.0000, 3.1400, 1.2000]
+
+# 10    0.174533
+# 20		0.349066
+# 30    0.523599
+# 40		0.698132
+# 30    0.523599
+# 40    0.698132
+# 50    0.872665
+# 60    1.0472
+# 70		1.22173
+# 80		1.39626
+# 90		1.5708
+# 100		1.74533
+# 110		1.91986
+# 120   2.0944
+# 130    2.26893
+# 140    2.44346
+# 150		2.61799
+# 160		2.79253
+# 170    2.96706
+# 180    3.14159
+
+# 1: Leicht nach vorne gestreckt, gerade:
+# 0	90		1.5708
+# 1	60		1.0472
+# 2	0		0.0
+# 3	150		2.61799
+# 4	90		1.5708
+  - name: extend_5_forward
+    joints: [1.5708,  1.0472,  0.0000, 2.61799, 1.5708]
+
+# 2: Leicht nach vorne gestreckt, links:
+# 0	100		1.74533
+# 1	60		1.0472
+# 2	0		0.0
+# 3	150		2.61799
+# 4	90		1.5708
+  - name: extend_5_left
+    joints: [1.74533,  1.0472,  0.0000, 2.61799, 1.5708]
+
+# 3: Leicht nach vorne gestreckt, rechts:
+# 0	70		1.22173
+# 1	60		1.0472
+# 2	0	  	0.0
+# 3	150		2.61799
+# 4	90		1.5708
+  - name: extend_5_right
+    joints: [1.22173,  1.0472,  0.0000, 2.61799, 1.5708]
+
+# 4: Nach vorne ausgestreckt, gerade:
+#0	90		1.5708
+#1	110		1.91986
+#2	10		0.174533
+#3	120		2.0944
+#4	90		1.5708
+  - name: extend_10_forward
+    joints: [1.5708,  1.91986,  0.174533, 2.0944, 1.5708]
+
+# 5: Nach vorne ausgestreckt, links:
+#0	100		1.74533
+#1	110		1.91986
+#2	10		0.174533
+#3	120		2.0944
+#4	100		1.74533
+  - name: extend_10_left
+    joints: [1.74533,  1.91986,  0.174533, 2.0944, 1.74533]
+
+# 6: Nach vorne ausgestreckt, rechts:
+#0	70    1.22173
+#1	110		1.91986
+#2	10		0.174533
+#3	120		2.0944
+#4	90		1.5708
+  - name: extend_10_right
+    joints: [1.22173,  1.91986,  0.174533, 2.0944, 1.5708]
+
+# 7: Flach unten nach vorne:
+#0	90		1.5708
+#1	160		2.79253
+#2	0 		0.0
+#3	20		0.349066
+#4	90		1.5708
+  - name: flat_15_forward
+    joints: [1.5708,  2.79253,  0.0, 0.349066, 1.5708]
+
+# 8: Flach unten nach links:
+#0	100		1.74533
+#1	160		2.79253
+#2	0 		0.0
+#3	20		0.349066
+#4	110		1.91986
+  - name: flat_15_left
+    joints: [1.74533,  2.79253,  0.0, 0.349066, 1.91986]
+
+# 9: Flach unten nach rechts:
+#0	70    1.22173
+#1	160		2.79253
+#2	0 		0.0
+#3	20		0.349066
+#4	90		1.5708
+  - name: flat_15_right
+    joints: [1.22173,  2.79253,  0.0, 0.349066, 1.5708]
+
+# 10: Flach oben nach vorne:
+#0	90		1.5708
+#1	110   1.91986
+#2	30    0.523599
+#3	90    1.5708
+#4	90		1.5708
+  - name: flat_height_10_forward
+    joints: [1.5708,  1.91986,  0.523599, 1.5708, 1.5708]
+
+# 11: nach oben nach vorne:
+#0	90		1.5708
+#1	170    2.96706
+#2	50     0.872665
+#3	0     0.0
+#4	90		1.5708
+  - name: upward_10_forward
+    joints: [1.5708,  2.96706,  0.872665, 0.0, 1.5708]
+
+# 12: nach unten nach vorne:
+#0	90		1.5708
+#1	100    1.74533
+#2	40     0.698132
+#3	180    3.14159
+#4	90		1.5708
+  - name: downward_10_forward
+    joints: [1.5708,  1.74533,  0.698132, 3.14159, 1.5708]
+
+# 13: flach middle 10 nach vorne:
+#0	90		1.5708
+#1	180    3.14159
+#2	180    3.14159
+#3	180    3.14159
+#4	90		1.5708
+  - name: flat_middle_10_forward
+    joints: [1.5708,  3.14159,  3.14159, 3.14159, 1.5708]
+
+# 14: flach middle 5 nach vorne:
+#0	90		1.5708
+#1	180    3.14159
+#2	130    2.26893
+#3	130    2.26893
+#4	90		1.5708
+  - name: flat_middle_5_forward
+    joints: [1.5708,  3.14159,  2.26893, 2.26893, 1.5708]
+

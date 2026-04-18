@@ -4,28 +4,106 @@
 #   tf_frame   : the link name in the URDF (base_link <- marker_X via TF2)
 #   hsv_lower  : [H, S, V] lower bound (OpenCV uses H in [0, 179])
 #   hsv_upper  : [H, S, V] upper bound
-#   min_area_px / max_area_px: contour area window (rejects noise + blobs)
+#   min_area_px / max_area_px: contour area window (rejects noise + cable
+#                               bundles). Keep tight: physical markers are
+#                               small stickers (~20-200 px at normal zoom).
 #
-# HSV tuning hint: open your camera image in an HSV inspector and sample
+# HSV tuning hint: open the debug image in an HSV inspector and sample
 # the marker color at typical lighting. Widen S/V ranges, narrow H.
 # For red, H can be set with low>high to wrap around 0 (handled by detector).
 
 markers:
   grasp:
     tf_frame: marker_grasp
-    hsv_lower: [5, 150, 100]        # orange
-    hsv_upper: [20, 255, 255]
-    min_area_px: 30
-    max_area_px: 5000
+    # Red ball on the gripper (replaces earlier orange sticker). Red
+    # wraps around H=0 on the OpenCV hue wheel (H in [0,179]), so the
+    # valid range is H>=170 OR H<=10. The detector handles this wrap
+    # automatically when lower[0] > upper[0] (see
+    # MarkerDetector._mask_hue_range). Upper bound 10 stays clear of
+    # the forearm yellow at H>=15.
+    # Two-pass HSV masking:
+    #   hsv_lower/upper         = LOOSE range (ball + some distractors)
+    #   hsv_lower_strict/upper_strict = TIGHT ball-core range (saturated red only)
+    # The detector keeps only loose-mask connected components that contain
+    # at least one strict-mask pixel. This lets the loose range be
+    # generous enough that the ball's grainy shadow/gloss pixels are all
+    # captured (solid mask, high compactness), while strict filters out
+    # background blobs (cable, wood, skin) that never reach "confidently
+    # red" saturation.
+    #
+    # Loose: S=55 floor catches the ball's dimmer rim/shaded patches
+    # (observed graininess came from rim pixels below S≈90). H wraparound
+    # [165, 15] allows slight orange lean in far poses.
+    hsv_lower: [165, 55, 35]
+    hsv_upper: [15, 255, 255]
+    # Strict: based on suggestion data — across detected poses ball S p5
+    # was ≥210 (see _log_hsv_threshold_suggestion output across runs).
+    # Set strict floor at S=180 with ~30 margin below observed truth;
+    # V=75 above the darkest shaded-rim V. H narrow to the "definitely
+    # red" core. Anything that passes here is almost certainly the ball.
+    hsv_lower_strict: [172, 180, 75]
+    hsv_upper_strict: [8, 255, 255]
+    # Balls are always >>1000 px at any calibration pose. Raised from
+    # 30 to 100 to reject small same-color artifacts on the workbench
+    # (e.g. red tape scraps, cable jackets) that otherwise outrank the
+    # ball when the ball briefly leaves the FOV.
+    min_area_px: 300
+    # Raised from 1500 because in the "anchor" pose the gripper is
+    # closest to the camera and the ball's pixel area exceeds the prior
+    # cap, causing the detector to silently skip it in exactly that pose
+    # while it worked in poses where the gripper is further away.
+    max_area_px: 4000
+    # With grasp's HSV loosened (S=65), CLOSE 13 tendrilled the ball
+    # out to nearby skin/cable/wood. 7 keeps the ball solid (a lot of
+    # ball pixels pass now — not much needs bridging) without merging
+    # distractors.
+    close_kernel_px: 7
   forearm:
     tf_frame: marker_forearm
-    hsv_lower: [45, 100, 80]        # green
-    hsv_upper: [75, 255, 255]
-    min_area_px: 30
-    max_area_px: 5000
+    # Yellow ball on the forearm (replaces earlier green sticker — the
+    # robot base is itself green and the HSV ranges overlapped). H band
+    # is pushed to 18..32 to stay cleanly above the orange grasp marker
+    # (H<=15) and well below cyan/green. High saturation+value because
+    # the ball is glossy and bright; lower bounds would pick up the
+    # wooden workbench.
+    # Loosened after HSV suggestion showed observation bias: the
+    # threshold was tight enough that only the "good" pose's ball pixels
+    # were captured in stats, so the suggestion couldn't see how low S
+    # had to go to reach the "bad" pose. S floor 120->90 admits the
+    # dimmer-saturation pose; H upper 25->32 follows the suggestion p95
+    # (the actual ball spans H up to 30).
+    # Tightened further after the 13x13 CLOSE merged the ball with a
+    # faintly-tinted beige artefact nearby (wood/table). Ball's own p5
+    # HSV (run-5 suggestion) was H≈19, S≈120 — configured bounds pull
+    # closer to those while keeping ~2 px H margin and ~5 S margin.
+    # V floor left low (ball has strongly shaded patches down to V≈45;
+    # lifting V risks the ball, not the wood). H lower 15->17 excludes
+    # the warmest table grain (H=15-17 band was bridging ball to table
+    # via tinted pixels between them). S floor 110->115.
+    hsv_lower: [17, 115, 100]
+    hsv_upper: [31, 255, 255]
+    min_area_px: 300
+    max_area_px: 3000
+    # Forearm ball has a pronounced specular stripe that CLOSE 9 could
+    # not bridge (observed c=0.47 before kernel was raised). Keep at 13.
+    close_kernel_px: 13
   base:
     tf_frame: marker_base
-    hsv_lower: [100, 150, 80]       # blue
+    # Blue ball on the base plate (replaces earlier blue sticker). H band
+    # narrow to avoid cyan (<95) and purple (>135) noise. S/V lower
+    # bounds loosened vs. the sticker version because the glossy ball
+    # has brighter, less saturated highlight rings that the tight limits
+    # were rejecting. max_area_px raised because the ball fills more
+    # image area than the flat sticker did.
+    hsv_lower: [95, 70, 50]
     hsv_upper: [130, 255, 255]
-    min_area_px: 30
-    max_area_px: 5000
+    # See grasp: same rationale — ball is always >>1000 px, floor
+    # raised to reject blue artifacts.
+    min_area_px: 300
+    # Tightest ceiling of the three: the base marker sits on the robot
+    # base plate and does NOT move relative to the camera across poses,
+    # so its ball area is near-constant. A strict cap keeps blue jeans
+    # / clothing in the background from outranking the ball.
+    # Raised 1200->1500 after pose 2 showed the ball at 1208 px with
+    # c=0.87 (very clearly the ball) being rejected as too_big by 8 px.
+    max_area_px: 1500

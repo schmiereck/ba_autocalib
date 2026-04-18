@@ -11,11 +11,14 @@ solves:
 
 Services
 --------
-~/run_sequence     (std_srvs/Trigger)  drive arm + collect + solve
-~/recalibrate      (std_srvs/Trigger)  solve from currently-buffered points
-~/reset            (std_srvs/Trigger)  drop all buffered points
-~/save             (std_srvs/Trigger)  write results to the canonical YAMLs
-~/load             (std_srvs/Trigger)  read current values from the YAMLs
+~/run_sequence          (std_srvs/Trigger)  drive arm + collect + solve
+~/recalibrate           (std_srvs/Trigger)  solve from currently-buffered points
+~/reset                 (std_srvs/Trigger)  drop all buffered points
+~/save                  (std_srvs/Trigger)  write results to the canonical YAMLs
+~/load                  (std_srvs/Trigger)  read current values from the YAMLs
+~/capture_once          (std_srvs/Trigger)  capture one datapoint at current pose
+~/reload_marker_config  (std_srvs/Trigger)  re-read marker_config.yaml (HSV etc.)
+~/reload_calib_poses    (std_srvs/Trigger)  re-read calib_poses.yaml
 
 Topics
 ------
@@ -25,7 +28,7 @@ Topics
 /ba_calib/depth_rmse_m        std_msgs/Float32
 /ba_calib/hand_eye            geometry_msgs/TransformStamped  (latched)
 /ba_calib/depth_params        std_msgs/Float32MultiArray      (latched)
-/ba_calib/debug/image         sensor_msgs/Image
+/ba_calib/debug/image/compressed  sensor_msgs/CompressedImage
 """
 
 import os
@@ -50,7 +53,7 @@ from std_srvs.srv import Trigger
 from tf2_ros import Buffer, LookupException, TransformListener
 
 from .data_collector import DataCollector, StillnessDetector
-from .marker_detector import MarkerConfig, MarkerDetector
+from .marker_detector import HSVStats, MarkerConfig, MarkerDetector
 from .persistence import write_depth, write_hand_eye
 from .sequence_runner import CalibPose, SequenceRunner
 from .solvers import (DataPoint, HandEyeResult, invert_transform,
@@ -83,6 +86,8 @@ class AutoCalibNode(Node):
                                'depth-anything/Depth-Anything-V2-Small-hf')
         self.declare_parameter('depth_device', 'cpu')
         self.declare_parameter('min_points_to_solve', 8)
+        self.declare_parameter('debug_image_path',
+                               '/tmp/ba_calib_debug.jpg')
 
         self._image_topic = self.get_parameter('image_topic').value
         self._info_topic = self.get_parameter('camera_info_topic').value
@@ -98,7 +103,8 @@ class AutoCalibNode(Node):
         self._marker_configs = self._load_marker_config(self._marker_cfg_path)
         self._calib_poses = self._load_calib_poses(self._poses_path)
 
-        self._detector = MarkerDetector(self._marker_configs)
+        self._detector = MarkerDetector(self._marker_configs,
+                                        logger=self.get_logger())
         self._data = DataCollector()
         self._still = StillnessDetector()
 
@@ -120,9 +126,17 @@ class AutoCalibNode(Node):
         self._latest_T_cam_base: Optional[np.ndarray] = None
         self._latest_depth = None
         self._sequence_lock = threading.Lock()
+        # HSV pixel stats accumulated across a run_sequence — one list
+        # of HSVStats per marker. Drained and summarized at the end of
+        # the sequence to emit a data-driven threshold suggestion.
+        self._hsv_stats_accum: Dict[str, List[HSVStats]] = {}
 
+        # RELIABLE required for CompressedImage over WSL2: BEST_EFFORT drops
+        # every message that loses even one UDP fragment (images are ~50 kB,
+        # fragmented across ~34 datagrams each), so we'd typically receive
+        # <15% of frames. RELIABLE lets the pub retransmit missing fragments.
         img_qos = QoSProfile(
-            reliability=ReliabilityPolicy.BEST_EFFORT,
+            reliability=ReliabilityPolicy.RELIABLE,
             durability=DurabilityPolicy.VOLATILE,
             history=HistoryPolicy.KEEP_LAST,
             depth=1,
@@ -162,8 +176,19 @@ class AutoCalibNode(Node):
             TransformStamped, '/ba_calib/hand_eye', latched_qos)
         self._pub_depth = self.create_publisher(
             Float32MultiArray, '/ba_calib/depth_params', latched_qos)
+        # Published as CompressedImage (JPEG ~40 kB) rather than raw Image
+        # (921 kB for 640x480 bgr8): UDP-fragmented raw images get dropped
+        # even on WSL2 loopback. Topic follows the ROS image_transport
+        # convention ("<base>/compressed") so rqt_image_view picks it up
+        # when you enter base name '/ba_calib/debug/image'.
         self._pub_debug_image = self.create_publisher(
-            Image, '/ba_calib/debug/image', 1)
+            CompressedImage, '/ba_calib/debug/image/compressed', 1)
+
+        # Continuous ~3 Hz debug stream so users can diagnose HSV / FOV
+        # while idle, not only during a sequence.
+        self._debug_timer = self.create_timer(
+            1.0 / 3.0, self._debug_timer_cb,
+            callback_group=self._cb_group)
 
         self.create_service(
             Trigger, '~/run_sequence',
@@ -180,6 +205,15 @@ class AutoCalibNode(Node):
         self.create_service(
             Trigger, '~/load',
             self._srv_load, callback_group=self._cb_group)
+        self.create_service(
+            Trigger, '~/reload_marker_config',
+            self._srv_reload_markers, callback_group=self._cb_group)
+        self.create_service(
+            Trigger, '~/capture_once',
+            self._srv_capture_once, callback_group=self._cb_group)
+        self.create_service(
+            Trigger, '~/reload_calib_poses',
+            self._srv_reload_calib_poses, callback_group=self._cb_group)
 
         self._runner = SequenceRunner(
             self,
@@ -206,13 +240,20 @@ class AutoCalibNode(Node):
             data = yaml.safe_load(f)
         configs = []
         for name, cfg in (data.get('markers') or {}).items():
+            lo_strict = cfg.get('hsv_lower_strict')
+            hi_strict = cfg.get('hsv_upper_strict')
             configs.append(MarkerConfig(
                 name=name,
                 tf_frame=cfg['tf_frame'],
                 hsv_lower=tuple(cfg['hsv_lower']),
                 hsv_upper=tuple(cfg['hsv_upper']),
+                hsv_lower_strict=tuple(lo_strict) if lo_strict else None,
+                hsv_upper_strict=tuple(hi_strict) if hi_strict else None,
                 min_area_px=int(cfg.get('min_area_px', 30)),
                 max_area_px=int(cfg.get('max_area_px', 5000)),
+                min_compactness=float(cfg.get('min_compactness', 0.55)),
+                edge_margin_px=int(cfg.get('edge_margin_px', 1)),
+                close_kernel_px=int(cfg.get('close_kernel_px', 9)),
             ))
         if not configs:
             return _default_marker_configs()
@@ -279,7 +320,8 @@ class AutoCalibNode(Node):
             log_fn=self.get_logger().info,
         )
 
-    def _sample_once(self, pose_name: str) -> int:
+    def _sample_once(self, pose_name: str,
+                     snapshot_path: Optional[str] = None) -> int:
         """Capture one image+depth, add a datapoint per detected marker."""
         if self._K is None:
             self.get_logger().warn('No camera_info yet; skipping sample')
@@ -296,7 +338,7 @@ class AutoCalibNode(Node):
         # depth_calibration.yaml schema (d_range in raw DA units).
         d_rel_map = self._depth_estimator.estimate(bgr)
 
-        detections = self._detector.detect(bgr)
+        detections = self._detector.detect(bgr, verbose=True)
         added = 0
         now_s = self.get_clock().now().nanoseconds * 1e-9
         for name, det in detections.items():
@@ -337,13 +379,22 @@ class AutoCalibNode(Node):
                     f'd_rel={d:.3f}')
             else:
                 self.get_logger().debug(f'  - {name} rejected: {reason}')
+            # Accumulate HSV stats on EVERY successful detection, not
+            # just on newly-added datapoints. try_add rejects duplicates
+            # across sequences; the pixel appearance statistics are
+            # still valid evidence about the current lighting.
+            if det.hsv_stats is not None:
+                self._hsv_stats_accum.setdefault(name, []).append(
+                    det.hsv_stats)
 
         self._pub_datapoints.publish(Int32(data=len(self._data)))
-        self._publish_debug_image(bgr, detections)
+        self._publish_debug_image(bgr, detections,
+                                  snapshot_path=snapshot_path)
         return added
 
     def _publish_debug_image(self, bgr: np.ndarray,
-                              detections: Dict) -> None:
+                              detections: Dict,
+                              snapshot_path: Optional[str] = None) -> None:
         reprojections = None
         if (self._latest_T_cam_base is not None and self._K is not None
                 and detections):
@@ -367,16 +418,68 @@ class AutoCalibNode(Node):
                 v = self._K[1, 1] * P_cam[1] / P_cam[2] + self._K[1, 2]
                 reprojections[name] = (u, v)
 
-        overlay = self._detector.draw_overlay(bgr, detections, reprojections)
-        msg = Image()
+        mask_bg = self._detector.draw_mask_overlay(bgr)
+        overlay = self._detector.draw_overlay(
+            mask_bg, detections, reprojections)
+        ok, buf = cv2.imencode('.jpg', overlay,
+                               [cv2.IMWRITE_JPEG_QUALITY, 80])
+        if not ok:
+            return
+        msg = CompressedImage()
         msg.header.stamp = self.get_clock().now().to_msg()
         msg.header.frame_id = 'camera_rect'
-        msg.height, msg.width = overlay.shape[:2]
-        msg.encoding = 'bgr8'
-        msg.is_bigendian = 0
-        msg.step = overlay.shape[1] * 3
-        msg.data = overlay.tobytes()
+        msg.format = 'jpeg'
+        msg.data = buf.tobytes()
         self._pub_debug_image.publish(msg)
+        # Also dump to disk — CycloneDDS on WSL2 loopback is unreliable for
+        # image traffic, so file-based inspection is the pragmatic fallback.
+        debug_path = self.get_parameter('debug_image_path').value
+        if debug_path:
+            # Reuse the JPEG bytes we just encoded for publishing (`buf`)
+            # and write them with plain Python file IO — cv2.imwrite on
+            # WSL2 has been observed to return True without the file
+            # landing on disk, which then trips up os.replace. The temp
+            # path is per-thread so concurrent _publish_debug_image calls
+            # (debug timer + sampling path share the same callback group)
+            # can't clobber each other's temp file.
+            root, ext = os.path.splitext(debug_path)
+            tmp_path = f'{root}.partial.{os.getpid()}.{threading.get_ident()}{ext}'
+            jpeg_bytes = buf.tobytes()
+            try:
+                with open(tmp_path, 'wb') as fh:
+                    fh.write(jpeg_bytes)
+                os.replace(tmp_path, debug_path)
+            except Exception as exc:
+                self.get_logger().warn(
+                    f'debug image write failed: {exc}',
+                    throttle_duration_sec=10.0)
+                try:
+                    os.remove(tmp_path)
+                except OSError:
+                    pass
+            if snapshot_path:
+                try:
+                    with open(snapshot_path, 'wb') as fh:
+                        fh.write(jpeg_bytes)
+                except Exception as exc:
+                    self.get_logger().warn(
+                        f'pose snapshot write failed ({snapshot_path}): '
+                        f'{exc}')
+
+    def _debug_timer_cb(self) -> None:
+        with self._frame_lock:
+            bgr = None if self._latest_bgr is None else self._latest_bgr.copy()
+        if bgr is None:
+            self.get_logger().info(
+                'debug tick: no camera frame buffered yet',
+                throttle_duration_sec=5.0)
+            return
+        try:
+            detections = self._detector.detect(bgr)
+            self._publish_debug_image(bgr, detections)
+        except Exception as exc:
+            self.get_logger().error(
+                f'debug tick failed: {exc}\n{traceback.format_exc()}')
 
     # -----------------------------------------------------------------
     # Solving
@@ -463,6 +566,7 @@ class AutoCalibNode(Node):
     def _run_sequence_worker(self) -> None:
         try:
             self._publish_status('collecting')
+            self._hsv_stats_accum.clear()
             settle = float(self.get_parameter('settle_s').value)
             visited = self._runner.run(
                 self._calib_poses,
@@ -472,6 +576,7 @@ class AutoCalibNode(Node):
             self.get_logger().info(
                 f'Sequence done: visited {visited} poses, '
                 f'{len(self._data)} datapoints buffered')
+            self._log_hsv_threshold_suggestion()
             self._publish_status('solving')
             err = self._solve_and_publish()
             if err:
@@ -484,7 +589,57 @@ class AutoCalibNode(Node):
         finally:
             self._sequence_lock.release()
 
-    def _per_pose_capture(self, pose: CalibPose) -> None:
+    def _log_hsv_threshold_suggestion(self) -> None:
+        """Emit a data-driven HSV range suggestion per marker.
+
+        Aggregates the per-detection HSVStats (p5/p95 inside each ball's
+        contour, HSV-filtered) across the whole sequence and widens with
+        a small safety margin. This is what the thresholds WOULD need to
+        be in order to cover the pixels that were actually observed on
+        the marker — not a guess.
+        """
+        if not self._hsv_stats_accum:
+            self.get_logger().info(
+                'HSV suggestion: no successful detections this sequence')
+            return
+        MARGIN = 5   # safety band added outside the observed p5/p95 window
+        for name, stats_list in self._hsv_stats_accum.items():
+            if not stats_list:
+                continue
+            s_lo = max(0, min(s.s_p5_p95[0] for s in stats_list) - MARGIN)
+            s_hi = min(255, max(s.s_p5_p95[1] for s in stats_list) + MARGIN)
+            v_lo = max(0, min(s.v_p5_p95[0] for s in stats_list) - MARGIN)
+            v_hi = min(255, max(s.v_p5_p95[1] for s in stats_list) + MARGIN)
+            wrap = stats_list[0].wrap
+            if not wrap:
+                h_lo = max(0, min(s.h_low[0] for s in stats_list) - MARGIN)
+                h_hi = min(179, max(s.h_low[1] for s in stats_list) + MARGIN)
+                suggest = (
+                    f'hsv_lower=[{h_lo}, {s_lo}, {v_lo}] '
+                    f'hsv_upper=[{h_hi}, {s_hi}, {v_hi}]')
+            else:
+                # For wrap-around: lower bound is the min observed on the
+                # high-H side (near 179), upper bound is the max observed
+                # on the low-H side (near 0). Both get margin applied
+                # "outward" around the wrap.
+                low_side_min = min(s.h_low[0] for s in stats_list
+                                   if s.h_low[1] > 0)
+                high_side_max = max(s.h_high[1] for s in stats_list
+                                    if s.h_high[1] > 0) \
+                    if any(s.h_high[1] > 0 for s in stats_list) else 0
+                h_lo = max(0, low_side_min - MARGIN)
+                h_hi = min(179, high_side_max + MARGIN)
+                suggest = (
+                    f'hsv_lower=[{h_lo}, {s_lo}, {v_lo}] '
+                    f'hsv_upper=[{h_hi}, {s_hi}, {v_hi}]  (wrap-around)')
+            n_det = len(stats_list)
+            n_pix = sum(s.n_pixels for s in stats_list)
+            self.get_logger().info(
+                f'HSV suggestion [{name}] ({n_det} detections, '
+                f'{n_pix} total marker pixels): {suggest}')
+
+    def _per_pose_capture(self, pose: CalibPose,
+                           idx: int, total: int) -> None:
         # Wait briefly for stillness before sampling.
         deadline = time.time() + 2.0
         while time.time() < deadline:
@@ -492,10 +647,17 @@ class AutoCalibNode(Node):
             if self._still.is_still(now_s=now):
                 break
             time.sleep(0.05)
-        added = self._sample_once(pose.name)
+        snapshot_path = None
+        debug_path = self.get_parameter('debug_image_path').value
+        if debug_path:
+            root, ext = os.path.splitext(debug_path)
+            safe_name = pose.name.replace('/', '_').replace(' ', '_')
+            snapshot_path = f'{root}_pose_{idx:02d}_{safe_name}{ext}'
+        added = self._sample_once(pose.name, snapshot_path=snapshot_path)
         self.get_logger().info(
-            f'Pose {pose.name}: +{added} points '
-            f'(total {len(self._data)})')
+            f'[{idx}/{total}] Pose {pose.name}: +{added} points '
+            f'(total {len(self._data)})'
+            + (f' -> {snapshot_path}' if snapshot_path else ''))
 
     def _srv_recalibrate(self, request, response):
         err = self._solve_and_publish()
@@ -547,6 +709,50 @@ class AutoCalibNode(Node):
         except Exception as exc:
             response.success = False
             response.message = f'Save failed: {exc}'
+        return response
+
+    def _srv_capture_once(self, request, response):
+        """Capture a single datapoint at the current arm pose.
+
+        Useful to validate detection + TF wiring without driving the arm
+        through the full pose sequence. Appends to the buffer, does not
+        solve.
+        """
+        try:
+            added = self._sample_once(pose_name='manual')
+            response.success = True
+            response.message = (
+                f'Captured {added} datapoint(s); buffer now has '
+                f'{len(self._data)}')
+        except Exception as exc:
+            response.success = False
+            response.message = f'Capture failed: {exc}'
+        return response
+
+    def _srv_reload_markers(self, request, response):
+        try:
+            configs = self._load_marker_config(self._marker_cfg_path)
+            self._detector = MarkerDetector(configs,
+                                            logger=self.get_logger())
+            self._marker_configs = configs
+            names = list(self._detector._configs.keys())
+            response.success = True
+            response.message = f'Reloaded {len(configs)} markers: {names}'
+        except Exception as exc:
+            response.success = False
+            response.message = f'Reload failed: {exc}'
+        return response
+
+    def _srv_reload_calib_poses(self, request, response):
+        try:
+            poses = self._load_calib_poses(self._poses_path)
+            self._calib_poses = poses
+            names = [p.name for p in poses]
+            response.success = True
+            response.message = f'Reloaded {len(poses)} poses: {names}'
+        except Exception as exc:
+            response.success = False
+            response.message = f'Reload failed: {exc}'
         return response
 
     def _srv_load(self, request, response):
@@ -619,6 +825,13 @@ def main(args=None):
     except KeyboardInterrupt:
         pass
     finally:
+        # Cancel any in-flight MoveIt goal so the arm doesn't keep driving
+        # through remaining calibration poses after Ctrl+C. move_group is
+        # a separate process — it only stops if we explicitly tell it to.
+        try:
+            node._runner.cancel()
+        except Exception:
+            pass
         node.destroy_node()
         rclpy.shutdown()
 
