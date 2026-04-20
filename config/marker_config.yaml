@@ -80,8 +80,8 @@ markers:
     # lifting V risks the ball, not the wood). H lower 15->17 excludes
     # the warmest table grain (H=15-17 band was bridging ball to table
     # via tinted pixels between them). S floor 110->115.
-    hsv_lower: [17, 115, 100]
-    hsv_upper: [31, 255, 255]
+    hsv_lower: [17, 128, 90]
+    hsv_upper: [33, 255, 255]
     min_area_px: 300
     max_area_px: 3000
     # Forearm ball has a pronounced specular stripe that CLOSE 9 could
@@ -89,21 +89,14 @@ markers:
     close_kernel_px: 13
   base:
     tf_frame: marker_base
-    # Blue ball on the base plate (replaces earlier blue sticker). H band
-    # narrow to avoid cyan (<95) and purple (>135) noise. S/V lower
-    # bounds loosened vs. the sticker version because the glossy ball
-    # has brighter, less saturated highlight rings that the tight limits
-    # were rejecting. max_area_px raised because the ball fills more
-    # image area than the flat sticker did.
-    hsv_lower: [95, 70, 50]
-    hsv_upper: [130, 255, 255]
-    # See grasp: same rationale — ball is always >>1000 px, floor
-    # raised to reject blue artifacts.
+    # Blue ball on the base plate. Two-pass HSV (same scheme as grasp):
+    # loose range captures ball edges + shadow; strict range filters dark
+    # background blobs (shadow, dark surfaces) that have low S/V but
+    # happen to fall in the blue H band. Black/dark areas fail the strict
+    # S>=110, V>=60 test even if they pass the loose range.
+    hsv_lower: [97, 88, 56]
+    hsv_upper: [121, 255, 255]
+    hsv_lower_strict: [100, 110, 60]
+    hsv_upper_strict: [125, 255, 255]
     min_area_px: 300
-    # Tightest ceiling of the three: the base marker sits on the robot
-    # base plate and does NOT move relative to the camera across poses,
-    # so its ball area is near-constant. A strict cap keeps blue jeans
-    # / clothing in the background from outranking the ball.
-    # Raised 1200->1500 after pose 2 showed the ball at 1208 px with
-    # c=0.87 (very clearly the ball) being rejected as too_big by 8 px.
     max_area_px: 1500
