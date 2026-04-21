@@ -40,6 +40,7 @@ from typing import Dict, List, Optional
 import cv2
 import numpy as np
 import rclpy
+from rclpy.time import Time
 import yaml
 from geometry_msgs.msg import TransformStamped
 from rclpy.callback_groups import ReentrantCallbackGroup
@@ -82,6 +83,7 @@ class AutoCalibNode(Node):
         self.declare_parameter('velocity_scaling', 0.2)
         self.declare_parameter('acceleration_scaling', 0.2)
         self.declare_parameter('settle_s', 0.7)
+        self.declare_parameter('camera_settle_s', 0.5)
         self.declare_parameter('depth_model_id',
                                'depth-anything/Depth-Anything-V2-Small-hf')
         self.declare_parameter('depth_device', 'cpu')
@@ -649,13 +651,38 @@ class AutoCalibNode(Node):
 
     def _per_pose_capture(self, pose: CalibPose,
                            idx: int, total: int) -> None:
-        # Wait briefly for stillness before sampling.
+        # 1. Wait briefly for arm to be still
         deadline = time.time() + 2.0
         while time.time() < deadline:
-            now = self.get_clock().now().nanoseconds * 1e-9
-            if self._still.is_still(now_s=now):
+            now_s = self.get_clock().now().nanoseconds * 1e-9
+            if self._still.is_still(now_s=now_s):
                 break
             time.sleep(0.05)
+        
+        # 2. Additional settle time for camera/mechanical vibrations
+        camera_settle = float(self.get_parameter('camera_settle_s').value)
+        time.sleep(camera_settle)
+        
+        # 3. NOW record the threshold: we want an image captured AFTER this moment
+        threshold_ns = self.get_clock().now().nanoseconds
+        
+        # 4. Wait for a fresh image after settle time
+        image_deadline = time.time() + 1.0  # Max 1 second wait
+        fresh_image_received = False
+        while time.time() < image_deadline:
+            with self._frame_lock:
+                if self._latest_stamp is not None:
+                    stamp_ns = Time.from_msg(self._latest_stamp).nanoseconds
+                    if stamp_ns > threshold_ns:
+                        fresh_image_received = True
+                        break
+            time.sleep(0.02)
+        
+        if not fresh_image_received:
+            self.get_logger().warn(
+                f'Pose {pose.name}: No fresh image after settle time, '
+                'using latest available.')
+        
         snapshot_path = None
         debug_path = self.get_parameter('debug_image_path').value
         if debug_path:

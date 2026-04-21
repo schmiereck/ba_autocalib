@@ -54,7 +54,7 @@ markers:
     # closest to the camera and the ball's pixel area exceeds the prior
     # cap, causing the detector to silently skip it in exactly that pose
     # while it worked in poses where the gripper is further away.
-    max_area_px: 4000
+    max_area_px: 3000
     # CLOSE 9 bridges small dark/shadow holes in the ball mask without
     # tendrilling to distractors (strict S≥140 still blocks non-ball blobs
     # even if the kernel merges a few nearby pixels).
@@ -76,7 +76,7 @@ markers:
     hsv_lower_strict: [18, 175, 80]
     hsv_upper_strict: [30, 255, 255]
     min_area_px: 300
-    max_area_px: 3000
+    max_area_px: 2500
     # Forearm ball has a pronounced specular stripe that CLOSE 9 could
     # not bridge (observed c=0.47 before kernel was raised). Keep at 13.
     close_kernel_px: 13
@@ -91,5 +91,5 @@ markers:
     hsv_upper: [121, 255, 255]
     hsv_lower_strict: [100, 110, 60]
     hsv_upper_strict: [125, 255, 255]
-    min_area_px: 99999
+    min_area_px: 300
     max_area_px: 1500
