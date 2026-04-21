@@ -137,6 +137,7 @@ class MarkerDetector:
             strict = self._mask_hue_range(hsv, cfg.hsv_lower_strict,
                                           cfg.hsv_upper_strict)
             num_cc, cc_labels = cv2.connectedComponents(mask)
+            n_before = num_cc - 1  # exclude background label 0
             if num_cc > 1:
                 # Per-label max over the strict mask: any value > 0 means
                 # the component contains at least one strict pixel.
@@ -149,6 +150,13 @@ class MarkerDetector:
                 has_core[0] = False  # background label always dropped
                 keep_mask = has_core[cc_labels]
                 mask = np.where(keep_mask, mask, 0).astype(np.uint8)
+                n_after = int(has_core.sum())
+                if verbose and n_after == 0 and n_before > 0 and self._logger:
+                    self._logger.info(
+                        f'[{cfg.name}] strict filter removed all {n_before} '
+                        f'loose blob(s) — ball visible but no strict-core pixel '
+                        f'(S<{cfg.hsv_lower_strict[1]}?)'
+                    )
         contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL,
                                        cv2.CHAIN_APPROX_SIMPLE)
         # Convex-hull compactness: 4πA_hull / p_hull².

@@ -31,18 +31,20 @@ markers:
     # background blobs (cable, wood, skin) that never reach "confidently
     # red" saturation.
     #
-    # Loose: S=55 floor catches the ball's dimmer rim/shaded patches
-    # (observed graininess came from rim pixels below S≈90). H wraparound
-    # [165, 15] allows slight orange lean in far poses.
-    hsv_lower: [165, 55, 35]
+    # Loose: H wraparound [158, 22]. H lower 158 reaches the dark-red /
+    # violet-leaning shaded side of the ball (suggestion p5 H=160).
+    # S floor 48, V floor 28 capture the ball's shadow patches.
+    # Loose: H lower 160 captures dark-red/shaded pixels (suggestion p5=153,
+    # using conservative 160 to avoid violet/background overlap).
+    # H upper MUST stay at ≤15 — forearm marker starts at H=17, any higher
+    # causes the grasp detector to pick up the yellow forearm ball!
+    # S lower 50, V lower 30 extend into dimmer shaded patches.
+    hsv_lower: [160, 50, 30]
     hsv_upper: [15, 255, 255]
-    # Strict: based on suggestion data — across detected poses ball S p5
-    # was ≥210 (see _log_hsv_threshold_suggestion output across runs).
-    # Set strict floor at S=180 with ~30 margin below observed truth;
-    # V=75 above the darkest shaded-rim V. H narrow to the "definitely
-    # red" core. Anything that passes here is almost certainly the ball.
-    hsv_lower_strict: [172, 180, 75]
-    hsv_upper_strict: [8, 255, 255]
+    # Strict: H lower 163 (core red, above loose lower 160 for confirmation).
+    # S floor 140 rejects background distractors (cables, skin, wood).
+    hsv_lower_strict: [163, 140, 75]
+    hsv_upper_strict: [10, 255, 255]
     # Balls are always >>1000 px at any calibration pose. Raised from
     # 30 to 100 to reject small same-color artifacts on the workbench
     # (e.g. red tape scraps, cable jackets) that otherwise outrank the
@@ -53,35 +55,26 @@ markers:
     # cap, causing the detector to silently skip it in exactly that pose
     # while it worked in poses where the gripper is further away.
     max_area_px: 4000
-    # With grasp's HSV loosened (S=65), CLOSE 13 tendrilled the ball
-    # out to nearby skin/cable/wood. 7 keeps the ball solid (a lot of
-    # ball pixels pass now — not much needs bridging) without merging
-    # distractors.
-    close_kernel_px: 7
+    # CLOSE 9 bridges small dark/shadow holes in the ball mask without
+    # tendrilling to distractors (strict S≥140 still blocks non-ball blobs
+    # even if the kernel merges a few nearby pixels).
+    close_kernel_px: 9
+    min_compactness: 0.50
   forearm:
     tf_frame: marker_forearm
-    # Yellow ball on the forearm (replaces earlier green sticker — the
-    # robot base is itself green and the HSV ranges overlapped). H band
-    # is pushed to 18..32 to stay cleanly above the orange grasp marker
-    # (H<=15) and well below cyan/green. High saturation+value because
-    # the ball is glossy and bright; lower bounds would pick up the
-    # wooden workbench.
-    # Loosened after HSV suggestion showed observation bias: the
-    # threshold was tight enough that only the "good" pose's ball pixels
-    # were captured in stats, so the suggestion couldn't see how low S
-    # had to go to reach the "bad" pose. S floor 120->90 admits the
-    # dimmer-saturation pose; H upper 25->32 follows the suggestion p95
-    # (the actual ball spans H up to 30).
-    # Tightened further after the 13x13 CLOSE merged the ball with a
-    # faintly-tinted beige artefact nearby (wood/table). Ball's own p5
-    # HSV (run-5 suggestion) was H≈19, S≈120 — configured bounds pull
-    # closer to those while keeping ~2 px H margin and ~5 S margin.
-    # V floor left low (ball has strongly shaded patches down to V≈45;
-    # lifting V risks the ball, not the wood). H lower 15->17 excludes
-    # the warmest table grain (H=15-17 band was bridging ball to table
-    # via tinted pixels between them). S floor 110->115.
+    # Yellow ball on the forearm. H band [17, 33] stays above the grasp
+    # orange marker (H<=15) and below cyan/green.
+    # Two-pass HSV (same scheme as grasp): loose range captures full ball
+    # including dim shadow pixels; strict confirms "definitely yellow ball"
+    # and rejects brown/orange parquet floor (parquet S is typically <150,
+    # never reaches the strict S floor of 175).
+    # Suggestion S p5=148 → strict S floor 175 (core ball only).
+    # V floor 90 in loose range: parquet at V<90 in H=[17,33] is excluded.
+    # Strict V floor 80: bright specular centre of ball comfortably passes.
     hsv_lower: [17, 128, 90]
     hsv_upper: [33, 255, 255]
+    hsv_lower_strict: [18, 175, 80]
+    hsv_upper_strict: [30, 255, 255]
     min_area_px: 300
     max_area_px: 3000
     # Forearm ball has a pronounced specular stripe that CLOSE 9 could
@@ -98,5 +91,5 @@ markers:
     hsv_upper: [121, 255, 255]
     hsv_lower_strict: [100, 110, 60]
     hsv_upper_strict: [125, 255, 255]
-    min_area_px: 300
+    min_area_px: 99999
     max_area_px: 1500

@@ -502,8 +502,9 @@ class AutoCalibNode(Node):
         self._pub_reproj.publish(Float32(data=he.median_px))
         self._publish_hand_eye_transform(he.T_cam_base)
 
+        inlier_points = [p for p, ok in zip(points, he.inlier_mask) if ok]
         try:
-            depth = solve_depth(points, he.T_cam_base)
+            depth = solve_depth(inlier_points, he.T_cam_base)
         except Exception as exc:
             self.get_logger().warn(f'depth solver failed: {exc}')
             depth = None
@@ -514,12 +515,14 @@ class AutoCalibNode(Node):
             self._pub_depth.publish(Float32MultiArray(
                 data=[depth.a, depth.b, depth.rmse_m, float(depth.n_samples)]))
 
+        n_info = (f'n={he.n_inliers}/{he.n_points}'
+                  if he.n_inliers < he.n_points else f'n={he.n_points}')
         status = 'good' if he.median_px < 3.0 and (
             depth is None or depth.rmse_m < 0.03) else 'degraded'
         self._publish_status(status)
         self.get_logger().info(
             f'Solved: reprojection_median={he.median_px:.2f}px '
-            f'(n={he.n_points})'
+            f'({n_info})'
             + ('' if depth is None else
                f', depth_rmse={depth.rmse_m*1000:.1f}mm '
                f'a={depth.a:.4f} b={depth.b:.4f}'))
