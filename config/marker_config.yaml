@@ -1,95 +1,34 @@
 # Marker definitions for ba_autocalib.
-#
-# Each marker:
-#   tf_frame   : the link name in the URDF (base_link <- marker_X via TF2)
-#   hsv_lower  : [H, S, V] lower bound (OpenCV uses H in [0, 179])
-#   hsv_upper  : [H, S, V] upper bound
-#   min_area_px / max_area_px: contour area window (rejects noise + cable
-#                               bundles). Keep tight: physical markers are
-#                               small stickers (~20-200 px at normal zoom).
-#
-# HSV tuning hint: open the debug image in an HSV inspector and sample
-# the marker color at typical lighting. Widen S/V ranges, narrow H.
-# For red, H can be set with low>high to wrap around 0 (handled by detector).
+# Balanced configuration: catch lila shadows but avoid background noise.
 
 markers:
   grasp:
     tf_frame: marker_grasp
-    # Red ball on the gripper (replaces earlier orange sticker). Red
-    # wraps around H=0 on the OpenCV hue wheel (H in [0,179]), so the
-    # valid range is H>=170 OR H<=10. The detector handles this wrap
-    # automatically when lower[0] > upper[0] (see
-    # MarkerDetector._mask_hue_range). Upper bound 10 stays clear of
-    # the forearm yellow at H>=15.
-    # Two-pass HSV masking:
-    #   hsv_lower/upper         = LOOSE range (ball + some distractors)
-    #   hsv_lower_strict/upper_strict = TIGHT ball-core range (saturated red only)
-    # The detector keeps only loose-mask connected components that contain
-    # at least one strict-mask pixel. This lets the loose range be
-    # generous enough that the ball's grainy shadow/gloss pixels are all
-    # captured (solid mask, high compactness), while strict filters out
-    # background blobs (cable, wood, skin) that never reach "confidently
-    # red" saturation.
-    #
-    # Loose: H wraparound [158, 22]. H lower 158 reaches the dark-red /
-    # violet-leaning shaded side of the ball (suggestion p5 H=160).
-    # S floor 48, V floor 28 capture the ball's shadow patches.
-    # Loose: H lower 160 captures dark-red/shaded pixels (suggestion p5=153,
-    # using conservative 160 to avoid violet/background overlap).
-    # H upper MUST stay at ≤15 — forearm marker starts at H=17, any higher
-    # causes the grasp detector to pick up the yellow forearm ball!
-    # S lower 50, V lower 30 extend into dimmer shaded patches.
-    hsv_lower: [160, 50, 30]
-    hsv_upper: [15, 255, 255]
-    # Strict: H lower 163 (core red, above loose lower 160 for confirmation).
-    # S floor 140 rejects background distractors (cables, skin, wood).
-    hsv_lower_strict: [163, 140, 75]
+    hsv_lower: [150, 40, 25]
+    hsv_upper: [20, 255, 255]
+    hsv_lower_strict: [160, 90, 50]
     hsv_upper_strict: [10, 255, 255]
-    # Balls are always >>1000 px at any calibration pose. Raised from
-    # 30 to 100 to reject small same-color artifacts on the workbench
-    # (e.g. red tape scraps, cable jackets) that otherwise outrank the
-    # ball when the ball briefly leaves the FOV.
-    min_area_px: 300
-    # Raised from 1500 because in the "anchor" pose the gripper is
-    # closest to the camera and the ball's pixel area exceeds the prior
-    # cap, causing the detector to silently skip it in exactly that pose
-    # while it worked in poses where the gripper is further away.
+    min_area_px: 250
     max_area_px: 3000
-    # CLOSE 9 bridges small dark/shadow holes in the ball mask without
-    # tendrilling to distractors (strict S≥140 still blocks non-ball blobs
-    # even if the kernel merges a few nearby pixels).
-    close_kernel_px: 9
-    min_compactness: 0.50
+    close_kernel_px: 11
+    min_compactness: 0.45
   forearm:
     tf_frame: marker_forearm
-    # Yellow ball on the forearm. H band [17, 33] stays above the grasp
-    # orange marker (H<=15) and below cyan/green.
-    # Two-pass HSV (same scheme as grasp): loose range captures full ball
-    # including dim shadow pixels; strict confirms "definitely yellow ball"
-    # and rejects brown/orange parquet floor (parquet S is typically <150,
-    # never reaches the strict S floor of 175).
-    # Suggestion S p5=148 → strict S floor 175 (core ball only).
-    # V floor 90 in loose range: parquet at V<90 in H=[17,33] is excluded.
-    # Strict V floor 80: bright specular centre of ball comfortably passes.
-    hsv_lower: [17, 128, 90]
-    hsv_upper: [33, 255, 255]
-    hsv_lower_strict: [18, 175, 80]
-    hsv_upper_strict: [30, 255, 255]
-    min_area_px: 300
+    hsv_lower: [12, 100, 50]
+    hsv_upper: [35, 255, 255]
+    hsv_lower_strict: [17, 160, 80]
+    hsv_upper_strict: [32, 255, 255]
+    min_area_px: 250
     max_area_px: 2500
-    # Forearm ball has a pronounced specular stripe that CLOSE 9 could
-    # not bridge (observed c=0.47 before kernel was raised). Keep at 13.
-    close_kernel_px: 13
+    close_kernel_px: 11
+    min_compactness: 0.50
   base:
     tf_frame: marker_base
-    # Blue ball on the base plate. Two-pass HSV (same scheme as grasp):
-    # loose range captures ball edges + shadow; strict range filters dark
-    # background blobs (shadow, dark surfaces) that have low S/V but
-    # happen to fall in the blue H band. Black/dark areas fail the strict
-    # S>=110, V>=60 test even if they pass the loose range.
-    hsv_lower: [97, 88, 56]
-    hsv_upper: [121, 255, 255]
-    hsv_lower_strict: [100, 110, 60]
-    hsv_upper_strict: [125, 255, 255]
-    min_area_px: 300
+    hsv_lower: [95, 100, 60]
+    hsv_upper: [125, 255, 255]
+    hsv_lower_strict: [100, 130, 80]
+    hsv_upper_strict: [120, 255, 255]
+    min_area_px: 250
     max_area_px: 1500
+    close_kernel_px: 9
+    min_compactness: 0.55

@@ -35,6 +35,8 @@ def generate_launch_description():
     calib_poses = LaunchConfiguration('calib_poses_file')
     perception_yaml = LaunchConfiguration('perception_yaml_path')
     depth_yaml = LaunchConfiguration('depth_yaml_path')
+    use_cnn = LaunchConfiguration('use_cnn')
+    cnn_model_path = LaunchConfiguration('cnn_model_path')
 
     return LaunchDescription([
         DeclareLaunchArgument(
@@ -55,6 +57,14 @@ def generate_launch_description():
             'depth_yaml_path',
             default_value=default_depth_yaml,
             description='Target file for depth save'),
+        DeclareLaunchArgument(
+            'use_cnn',
+            default_value='false',
+            description='Use YOLOv8-pose for marker detection'),
+        DeclareLaunchArgument(
+            'cnn_model_path',
+            default_value='marker_yolo.pt',
+            description='Filename of the YOLO model in the models/ directory'),
         Node(
             package='ba_autocalib',
             executable='autocalib_node',
@@ -65,6 +75,8 @@ def generate_launch_description():
                 'calib_poses_file': calib_poses,
                 'perception_yaml_path': perception_yaml,
                 'depth_yaml_path': depth_yaml,
+                'use_cnn': use_cnn,
+                'cnn_model_path': cnn_model_path,
             }],
             env=env,
         ),

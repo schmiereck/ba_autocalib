@@ -37,6 +37,7 @@ import time
 import traceback
 from typing import Dict, List, Optional
 
+from ament_index_python.packages import get_package_share_directory
 import cv2
 import numpy as np
 import rclpy
@@ -87,7 +88,9 @@ class AutoCalibNode(Node):
         self.declare_parameter('depth_model_id',
                                'depth-anything/Depth-Anything-V2-Small-hf')
         self.declare_parameter('depth_device', 'cpu')
-        self.declare_parameter('min_points_to_solve', 8)
+        self.declare_parameter('min_points_to_solve', 5)
+        self.declare_parameter('use_cnn', False)
+        self.declare_parameter('cnn_model_path', 'marker_yolo.pt')
         self.declare_parameter('debug_image_path',
                                '/tmp/ba_calib_debug.jpg')
 
@@ -105,8 +108,7 @@ class AutoCalibNode(Node):
         self._marker_configs = self._load_marker_config(self._marker_cfg_path)
         self._calib_poses = self._load_calib_poses(self._poses_path)
 
-        self._detector = MarkerDetector(self._marker_configs,
-                                        logger=self.get_logger())
+        self._init_detector()
         self._data = DataCollector()
         self._still = StillnessDetector()
 
@@ -231,6 +233,30 @@ class AutoCalibNode(Node):
         self.get_logger().info(
             f'ba_autocalib ready. Markers: {list(self._detector._configs.keys())}. '
             f'Poses loaded: {len(self._calib_poses)}')
+
+    def _init_detector(self) -> None:
+        """Initialize detector based on parameters."""
+        use_cnn = self.get_parameter('use_cnn').value
+        if use_cnn:
+            from .marker_detector import CNNMarkerDetector
+            model_path = self.get_parameter('cnn_model_path').value
+            # Resolve path: check shared directory first, then fallback to local relative
+            try:
+                pkg_share = get_package_share_directory('ba_autocalib')
+                model_path = os.path.join(pkg_share, 'models', model_path)
+                if not os.path.exists(model_path): raise FileNotFoundError()
+            except Exception:
+                # Fallback for local dev without installation
+                pkg_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+                model_path = os.path.join(pkg_dir, 'models', model_path)
+
+            self._detector = CNNMarkerDetector(model_path, self._marker_configs, logger=self.get_logger())
+            self.get_logger().info(f'Using CNN-based marker detection (Model: {model_path})')
+
+        else:
+            from .marker_detector import MarkerDetector
+            self._detector = MarkerDetector(self._marker_configs, logger=self.get_logger())
+            self.get_logger().info('Using HSV-based marker detection.')
 
     # -----------------------------------------------------------------
     # Config loading
@@ -663,25 +689,28 @@ class AutoCalibNode(Node):
         camera_settle = float(self.get_parameter('camera_settle_s').value)
         time.sleep(camera_settle)
         
-        # 3. NOW record the threshold: we want an image captured AFTER this moment
-        threshold_ns = self.get_clock().now().nanoseconds
+        # 3. Record the timestamp of the CURRENTLY buffered image
+        last_stamp_ns = 0
+        with self._frame_lock:
+            if self._latest_stamp is not None:
+                last_stamp_ns = Time.from_msg(self._latest_stamp).nanoseconds
         
-        # 4. Wait for a fresh image after settle time
-        image_deadline = time.time() + 1.0  # Max 1 second wait
+        # 4. Wait for a NEW image (any image with a newer timestamp than last_stamp_ns)
+        image_deadline = time.time() + 2.0  # Increased to 2s to be safe
         fresh_image_received = False
         while time.time() < image_deadline:
             with self._frame_lock:
                 if self._latest_stamp is not None:
-                    stamp_ns = Time.from_msg(self._latest_stamp).nanoseconds
-                    if stamp_ns > threshold_ns:
+                    current_stamp_ns = Time.from_msg(self._latest_stamp).nanoseconds
+                    if current_stamp_ns > last_stamp_ns:
                         fresh_image_received = True
                         break
             time.sleep(0.02)
         
         if not fresh_image_received:
             self.get_logger().warn(
-                f'Pose {pose.name}: No fresh image after settle time, '
-                'using latest available.')
+                f'Pose {pose.name}: No NEW image received after settle time '
+                f'(last_stamp_ns was {last_stamp_ns}), using latest available.')
         
         snapshot_path = None
         debug_path = self.get_parameter('debug_image_path').value
@@ -767,13 +796,11 @@ class AutoCalibNode(Node):
 
     def _srv_reload_markers(self, request, response):
         try:
-            configs = self._load_marker_config(self._marker_cfg_path)
-            self._detector = MarkerDetector(configs,
-                                            logger=self.get_logger())
-            self._marker_configs = configs
+            self._marker_configs = self._load_marker_config(self._marker_cfg_path)
+            self._init_detector()
             names = list(self._detector._configs.keys())
             response.success = True
-            response.message = f'Reloaded {len(configs)} markers: {names}'
+            response.message = f'Reloaded {len(self._marker_configs)} markers: {names}'
         except Exception as exc:
             response.success = False
             response.message = f'Reload failed: {exc}'

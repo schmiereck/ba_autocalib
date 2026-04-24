@@ -1,1 +1,10 @@
 ba_autocalib/__pycache__/
+
+# ROS2 / colcon build artifacts
+build/
+install/
+log/
+
+scripts/**/log/
+scripts/**/build/
+scripts/**/install/
