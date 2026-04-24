@@ -93,7 +93,7 @@ def write_depth(yaml_path: str, result: DepthResult,
         backup_path = ''
 
     payload = {
-        'model_type': 'inverse',
+        'model_type': result.model_type,
         'a': float(result.a),
         'b': float(result.b),
         'rmse_m': float(result.rmse_m),

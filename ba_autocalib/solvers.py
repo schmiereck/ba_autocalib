@@ -8,7 +8,8 @@ Works on a homogeneous list of DataPoint objects:
     marker  : str (for bookkeeping)
 
 Hand-Eye solution: cv2.solvePnP (SQPNP) -> T_cam_base (4x4)
-Depth solution:    curve fit Z_cam = a / d_rel + b using the PnP result.
+Depth solution:    fits both Z_cam = a / d_rel + b and Z_cam = a * d_rel + b,
+                   choosing the model with the lowest RMSE.
 """
 
 from dataclasses import dataclass
@@ -39,6 +40,7 @@ class HandEyeResult:
 
 @dataclass
 class DepthResult:
+    model_type: str  # "linear" or "inverse"
     a: float
     b: float
     rmse_m: float
@@ -53,12 +55,7 @@ _RANSAC_MIN_INLIERS = 6    # fall back to full-set SQPNP below this count
 
 def solve_hand_eye(points: List[DataPoint], K: np.ndarray,
                    dist: Optional[np.ndarray] = None) -> HandEyeResult:
-    """Solve T_cam_base from N >= 4 (P_base, uv) correspondences.
-
-    Uses RANSAC to discard outlier correspondences (wrong detections, TF
-    timing jitter), then refines with SQPNP on the inlier subset.
-    Falls back to plain SQPNP on all points if RANSAC finds too few inliers.
-    """
+    """Solve T_cam_base from N >= 4 (P_base, uv) correspondences."""
     if len(points) < 4:
         raise ValueError(f'Need at least 4 points, got {len(points)}')
 
@@ -127,43 +124,56 @@ def solve_hand_eye(points: List[DataPoint], K: np.ndarray,
 
 def solve_depth(points: List[DataPoint],
                 T_cam_base: np.ndarray) -> DepthResult:
-    """Fit Z_cam = a / d_rel + b using PnP-derived ground truth Z_cam."""
+    """Fit Z_cam = f(d_rel). Compares linear and inverse models."""
     if len(points) < 5:
         raise ValueError(f'Need at least 5 points for depth fit, got {len(points)}')
 
     P_base = np.array([p.P_base for p in points], dtype=np.float64)
-    d_rel = np.array([p.d_rel for p in points], dtype=np.float64)
+    d_rel_raw = np.array([p.d_rel for p in points], dtype=np.float64)
 
     P_base_h = np.concatenate([P_base, np.ones((len(points), 1))], axis=1)
     P_cam = (T_cam_base @ P_base_h.T).T[:, :3]
-    Z_cam = P_cam[:, 2]
+    Z_cam_raw = P_cam[:, 2]
 
-    # Mask non-positive depths defensively (behind-camera points from a bad
-    # PnP should have been filtered upstream, but be safe).
-    mask = (Z_cam > 0) & (d_rel > 1e-4)
+    # Mask valid data
+    mask = (Z_cam_raw > 0) & (d_rel_raw > 1e-4)
     if mask.sum() < 5:
         raise RuntimeError('Too few valid (Z_cam, d_rel) pairs after filtering')
-    Z_cam = Z_cam[mask]
-    d_rel = d_rel[mask]
+    Z_cam = Z_cam_raw[mask]
+    d_rel = d_rel_raw[mask]
 
-    # Linear LSQ on 1/d: Z = a * (1/d) + b
-    x = 1.0 / d_rel
-    A = np.column_stack([x, np.ones_like(x)])
-    coeffs, *_ = np.linalg.lstsq(A, Z_cam, rcond=None)
-    a, b = float(coeffs[0]), float(coeffs[1])
+    # --- Model 1: Inverse (Z = a/d + b) ---
+    x_inv = 1.0 / d_rel
+    A_inv = np.column_stack([x_inv, np.ones_like(x_inv)])
+    coeffs_inv, *_ = np.linalg.lstsq(A_inv, Z_cam, rcond=None)
+    a_inv, b_inv = float(coeffs_inv[0]), float(coeffs_inv[1])
+    rmse_inv = float(np.sqrt(np.mean(((a_inv / d_rel + b_inv) - Z_cam) ** 2)))
 
-    pred = a / d_rel + b
-    rmse = float(np.sqrt(np.mean((pred - Z_cam) ** 2)))
+    # --- Model 2: Linear (Z = a*d + b) ---
+    A_lin = np.column_stack([d_rel, np.ones_like(d_rel)])
+    coeffs_lin, *_ = np.linalg.lstsq(A_lin, Z_cam, rcond=None)
+    a_lin, b_lin = float(coeffs_lin[0]), float(coeffs_lin[1])
+    rmse_lin = float(np.sqrt(np.mean(((a_lin * d_rel + b_lin) - Z_cam) ** 2)))
 
-    return DepthResult(
-        a=a, b=b, rmse_m=rmse, n_samples=int(mask.sum()),
-        d_range=(float(d_rel.min()), float(d_rel.max())),
-        depth_range_m=(float(Z_cam.min()), float(Z_cam.max())),
-    )
+    # Choose winner
+    if rmse_lin < rmse_inv:
+        return DepthResult(
+            model_type="linear", a=a_lin, b=b_lin, rmse_m=rmse_lin,
+            n_samples=int(mask.sum()),
+            d_range=(float(d_rel.min()), float(d_rel.max())),
+            depth_range_m=(float(Z_cam.min()), float(Z_cam.max())),
+        )
+    else:
+        return DepthResult(
+            model_type="inverse", a=a_inv, b=b_inv, rmse_m=rmse_inv,
+            n_samples=int(mask.sum()),
+            d_range=(float(d_rel.min()), float(d_rel.max())),
+            depth_range_m=(float(Z_cam.min()), float(Z_cam.max())),
+        )
 
 
 def invert_transform(T: np.ndarray) -> np.ndarray:
-    """Invert a rigid 4x4 transform (faster and stabler than np.linalg.inv)."""
+    """Invert a rigid 4x4 transform."""
     R = T[:3, :3]
     t = T[:3, 3]
     Ti = np.eye(4)

@@ -552,7 +552,7 @@ class AutoCalibNode(Node):
             f'Solved: reprojection_median={he.median_px:.2f}px '
             f'({n_info})'
             + ('' if depth is None else
-               f', depth_rmse={depth.rmse_m*1000:.1f}mm '
+               f', depth_rmse={depth.rmse_m*1000:.1f}mm ({depth.model_type}) '
                f'a={depth.a:.4f} b={depth.b:.4f}'))
         return None
 
